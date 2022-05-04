@@ -2,32 +2,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using System.Text.Json;
 namespace teichert.raft;
-
-public class AppendEntriesRPCInfo
-{
-    public int LeaderTerm { get; set; } // c.f. term
-    public int LeaderIndex { get; set; } // c.f. leaderId
-    public int EntriesAlreadySent { get; set; } // c.f. prevLogIndex
-    public int LastTermSent { get; set; }  // c.f. prevLogTerm
-    public LogEntry[] EntriesToAppend { get; set; } = new LogEntry[] { }; // c.f. entries[]
-    public int SenderSafeEntries { get; set; } // c.f. leaderCommit
-}
-
-public class RPCResponseInfo
-{
-    public int CurrentTerm { get; set; } // c.f. term
-    public bool Response { get; set; } // c.f. success / voteGranted
-}
-
-public class RequestVoteRPCInfo
-{
-    public int CandidateTerm { get; set; } // c.f. term
-    public int CandidateIndex { get; set; } // c.f. candidateId
-    public int CandidateLogLength { get; set; } // c.f. lastLogIndex
-    public int CandidateLogTerm { get; set; } // c.f. lastLogterm
-}
 
 public class RaftNode
 {
@@ -213,11 +188,12 @@ public class RaftNode
     private void HandleRequestVoteRPC(RequestVoteRPCInfo request, IPEndPoint from)
     {
         Console.WriteLine("Handling VoteRequest");
+        RestartElectionTimer(); // c.f. Rules.Followers.2
         StepDownIfNecessary(request.CandidateTerm); // c.f. Rules.All.2
         RPCResponseInfo response = new RPCResponseInfo() { CurrentTerm = currentTerm, Response = false };
         RaftMessage responseMessage = new RaftMessage() { MessageType = MessageType.Response, RPCResponseInfo = response };
         int logLength = logEntries.Count;
-        int lastLogTerm = logEntries[logLength - 1].Term;
+        int lastLogTerm = (logEntries.Count > 0) ? logEntries[logLength - 1].Term : 0;
 
         Console.WriteLine($"candidate term {request.CandidateTerm} > {currentTerm}  --- voted for {votedFor} --- candidate log term {request.CandidateLogTerm} > {lastLogTerm}");
 
@@ -267,7 +243,7 @@ public class RaftNode
             RequestVoteRPCInfo = voteRequest
         });
 
-        Console.WriteLine($"Reply for vote request {reply}");
+        Console.WriteLine($"Reply for vote request {reply.MessageType}");
 
         if (reply.RPCResponseInfo!.Response)
         {
@@ -302,7 +278,7 @@ public class RaftNode
         {
             int logLength = logEntries.Count;
             int numSent = possiblyReplicatedEntries[index];
-            int lastTermSent = logEntries[numSent - 1].Term;
+            int lastTermSent = (logEntries.Count > 0) ? logEntries[numSent - 1].Term : 0;
             if (logLength > numSent)
             {
                 AppendEntriesRPCInfo request = new AppendEntriesRPCInfo()
@@ -579,71 +555,5 @@ public class RaftNode
             StartBeingLeader();
         }
     }
-}
-
-public class RaftMessage
-{
-    public MessageType MessageType { get; set; }
-    public AppendEntriesRPCInfo? AppendEntriesRPCInfo { get; set; }
-    public RequestVoteRPCInfo? RequestVoteRPCInfo { get; set; }
-    public RPCResponseInfo? RPCResponseInfo { get; set; }
-    public RaftCommand? RaftCommand { get; set; }
-
-    public static RaftMessage FromJson(string json)
-    {
-        return JsonSerializer.Deserialize<RaftMessage>(json)!;
-    }
-    public string Json()
-    {
-        return JsonSerializer.Serialize(this);
-    }
-}
-
-public enum MessageType
-{
-    VoteRequest,
-    Response,
-    Query,
-    AppendEntries
-}
-
-record TimeSpanRange(TimeSpan Min, TimeSpan Max)
-{
-    public TimeSpan SampleUniform(Random randomGenerator)
-    {
-        double randDiff = randomGenerator.NextDouble() * ((Max - Min).TotalMilliseconds);
-        return Min.Add(TimeSpan.FromMilliseconds(randDiff));
-    }
-}
-
-public class LogEntry
-{
-    public int Term { get; set; }
-    public RaftCommand? Command { get; set; }
-
-    public static LogEntry FromJson(string json)
-    {
-        return JsonSerializer.Deserialize<LogEntry>(json)!;
-    }
-    public string Json()
-    {
-        return JsonSerializer.Serialize(this);
-    }
-}
-
-public enum CommandType
-{
-    Init,
-    Set,
-    Get
-}
-
-/// <summary>Represents a query/update to the statemachine by a particular client (who will eventually need the response)</summary>
-public class RaftCommand
-{
-    public CommandType CommandType { set; get; }
-    public string? Key { set; get; } = null;
-    public int Value { set; get; }
-    public IPEndPoint? Client { get; set; }
 }
 
