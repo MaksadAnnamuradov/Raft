@@ -58,7 +58,7 @@ public class RaftNode
     private ConcurrentDictionary<int, int> confirmedReplicatedEntries = new(); // c.f. matchIndex[] (waiting until we know they got all of ours)
 
     // FIXED / UTIL
-    private const int TimeOutMultiplier = 10;
+    private const int TimeOutMultiplier = 100;
     private TimeSpanRange ElectionTimeOutRange = new TimeSpanRange(
         TimeSpan.FromMilliseconds(150 * TimeOutMultiplier),
         TimeSpan.FromMilliseconds(300 * TimeOutMultiplier));
@@ -219,9 +219,11 @@ public class RaftNode
         int logLength = logEntries.Count;
         int lastLogTerm = logEntries[logLength - 1].Term;
 
+        Console.WriteLine($"candidate term {request.CandidateTerm} > {currentTerm}  --- voted for {votedFor} --- candidate log term {request.CandidateLogTerm} > {lastLogTerm}");
+
         if (request.CandidateTerm >= currentTerm && // c.f. RequestVote.1
             (votedFor is null || votedFor == request.CandidateIndex) &&  // c.f. RequestVote.2
-/*            request.CandidateLogLength >= logEntries.Count &&*/
+            request.CandidateLogLength >= logEntries.Count &&
             request.CandidateLogTerm >= lastLogTerm)
         {
             RestartElectionTimer(); // c.f. Rules.Followers.2
@@ -269,6 +271,7 @@ public class RaftNode
 
         if (reply.RPCResponseInfo!.Response)
         {
+            Console.WriteLine("Successful vote");
             AddVote(voterId);
         }
         else
