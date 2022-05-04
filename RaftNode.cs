@@ -59,7 +59,7 @@ public class RaftNode
     private ConcurrentDictionary<int, int> confirmedReplicatedEntries = new(); // c.f. matchIndex[] (waiting until we know they got all of ours)
 
     // FIXED / UTIL
-    private const int TimeOutMultiplier = 10;
+    private const int TimeOutMultiplier = 100;
     private TimeSpanRange ElectionTimeOutRange = new TimeSpanRange(
         TimeSpan.FromMilliseconds(150 * TimeOutMultiplier),
         TimeSpan.FromMilliseconds(300 * TimeOutMultiplier));
@@ -142,6 +142,7 @@ public class RaftNode
 
         // ask everyone for a vote // c.f. Rules.Candidates.1.4
         List<Task> tasks = new();
+
         foreach (int i in Enumerable.Range(0, allNodes.Count))
         {
             if (i != nodeIndex)
@@ -221,6 +222,9 @@ public class RaftNode
         RaftMessage responseMessage = new RaftMessage() { MessageType = MessageType.Response, RPCResponseInfo = response };
         int logLength = logEntries.Count;
         int lastLogTerm = logEntries[logLength - 1].Term;
+
+        Console.WriteLine($"candidate term {request.CandidateTerm} > {currentTerm}  --- voted for {votedFor} --- candidate log term {request.CandidateLogTerm} > {lastLogTerm}");
+
         if (request.CandidateTerm >= currentTerm && // c.f. RequestVote.1
             (votedFor is null || votedFor == request.CandidateIndex) &&  // c.f. RequestVote.2
             request.CandidateLogLength >= logEntries.Count &&
@@ -228,6 +232,7 @@ public class RaftNode
         {
             RestartElectionTimer(); // c.f. Rules.Followers.2
             response.Response = true;
+            Console.WriteLine("Condition satisfied, sending back vote response");
         }
         Send(responseMessage, from);
     }
@@ -252,6 +257,7 @@ public class RaftNode
         int logLength = logEntries.Count;
 
         int lastLogTerm = logLength == 0 ? 0:logEntries[logLength - 1].Term;
+
         RequestVoteRPCInfo voteRequest = new()
         {
             CandidateTerm = currentTerm,
@@ -264,8 +270,12 @@ public class RaftNode
             MessageType = MessageType.VoteRequest,
             RequestVoteRPCInfo = voteRequest
         });
+
+        Console.WriteLine($"Reply for vote request {reply}");
+
         if (reply.RPCResponseInfo!.Response)
         {
+            Console.WriteLine("Successful vote");
             AddVote(voterId);
         }
         else
@@ -360,6 +370,7 @@ public class RaftNode
     }
     private void UpdateTerm(int newTerm)
     {
+        Console.WriteLine($"Updating new term {newTerm}");
         lock (currentTermPath)
         {
             currentTerm = newTerm;
@@ -369,6 +380,7 @@ public class RaftNode
 
     private void IncrementTerm()
     {
+        Console.WriteLine($"Incrementing term");
         lock (currentTermPath)
         {
             currentTerm++;
@@ -378,6 +390,7 @@ public class RaftNode
 
     private void AppendEntryToLog(LogEntry entry)
     {
+        Console.WriteLine($"Appending log entry {entry}");
         lock (logEntries)
         {
             logEntries.Add(entry);
@@ -390,6 +403,7 @@ public class RaftNode
         lock (voteLock)
         {
             votedFor = nodeIndex;
+            Console.WriteLine($"{nodeIndex} Voted for {votedFor}");
             File.WriteAllText(votedForPath, "" + nodeIndex);
         }
     }
@@ -397,6 +411,7 @@ public class RaftNode
     public void RestartElectionTimer()
     {
         // c.f. Rules.Candidates.4
+        Console.WriteLine("Changing election timer");
         electionTimer.Change(ElectionTimeOutRange.SampleUniform(randomGenerator), Timeout.InfiniteTimeSpan);
     }
 
@@ -415,12 +430,14 @@ public class RaftNode
 
     private void AppendEntries(IEnumerable<LogEntry> entries)
     {
+        Console.WriteLine("Appending entries");
         AppendEntries(entries, logEntriesPath);
     }
 
     private void AppendEntries(IEnumerable<LogEntry> entries, string path)
     {
         File.AppendAllLines(path, entries.Select(entry => entry.Json()));
+        Console.WriteLine($"Appending entry to path {path}");
         foreach (LogEntry entry in entries)
         {
             logEntries.Add(entry);
@@ -488,6 +505,7 @@ public class RaftNode
     }
     private void LoadStateFromFiles()
     {
+        Console.WriteLine("Loading state from file");
         File.AppendAllText(currentTermPath, "");
         if (!int.TryParse(File.ReadAllText(currentTermPath), out currentTerm))
         {
@@ -509,16 +527,19 @@ public class RaftNode
 
     private static UdpClient Send(RaftMessage message, IPEndPoint otherNode)
     {
+        Console.WriteLine($"Sending message to {otherNode.Address}{otherNode.Port} with message {message.MessageType}");
         return Send(message, otherNode, new UdpClient());
     }
 
     private static UdpClient Send(RaftMessage message, IPEndPoint otherNode, UdpClient udpClient)
     {
+        Console.WriteLine($"Sending message to {otherNode.Address}{otherNode.Port} with message {message.MessageType}");
         return Send(message.Json(), otherNode, udpClient);
     }
 
     private static UdpClient Send(string message, IPEndPoint otherNode, UdpClient udpClient)
     {
+        Console.WriteLine($"Sending message to {otherNode.Address}{otherNode.Port} with message {message}");
         byte[] data = UTF8Encoding.UTF8.GetBytes(message);
         udpClient.Send(data, data.Length, otherNode);
         return udpClient;
@@ -532,22 +553,38 @@ public class RaftNode
 
     private static RaftMessage Receive(UdpClient udpClient, out IPEndPoint from)
     {
+
         IPEndPoint localFrom = new(0, 0);
         byte[] data = udpClient.Receive(ref localFrom);
         string json = UTF8Encoding.UTF8.GetString(data);
         RaftMessage returnMessage = RaftMessage.FromJson(json);
         from = localFrom;
+
+        Console.WriteLine($"Received message{returnMessage} from {from} ");
+
         return returnMessage;
     }
 
     private static RaftMessage SendAndReceive(IPEndPoint otherNode, RaftMessage message)
     {
-        UdpClient myClient = Send(message, otherNode);
-        return Receive(myClient);
+        var raftMessage = new RaftMessage();
+        try
+        {
+            UdpClient myClient = Send(message, otherNode);
+            raftMessage = Receive(myClient);
+
+        }
+        catch (Exception e)
+        {
+
+            Console.WriteLine(e);
+        }
+        return raftMessage;
     }
 
     private void AddVote(int voterIndex)
     {
+        Console.WriteLine($"Adding a vote from {voterIndex}");
         votesForMe[voterIndex] = true;
         if (votesForMe.Count > allNodes.Count / 2) // c.f. Rules.Candidates.2
         {
