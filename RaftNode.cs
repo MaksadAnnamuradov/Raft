@@ -32,6 +32,7 @@ public class RequestVoteRPCInfo
 public class RaftNode
 {
     public RaftState RaftState = RaftState.Follower;
+    public RaftState PreviousRaftState;
     private List<IPEndPoint> allNodes;
     private int nodeIndex; // index of this node in the list of allNodes
     private int leaderIndex = 0; // index of leader node so that this node can forward requests to leader
@@ -108,6 +109,7 @@ public class RaftNode
             }
         }
         electionTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        PreviousRaftState = RaftState;
         RaftState = RaftState.Leader;
         heartBeatTimer.Change(TimeSpan.Zero, Timeout.InfiniteTimeSpan); // c.f. Rules.Leaders.1
         CancelCurrentElection();
@@ -116,6 +118,7 @@ public class RaftNode
     public void StartBeingFollower()
     {
         Console.WriteLine("Changing to Follower");
+        PreviousRaftState = RaftState;
         RaftState = RaftState.Follower;
         RestartElectionTimer();
     }
@@ -131,6 +134,7 @@ public class RaftNode
     {
         Console.WriteLine("Changing to Candidate");
         CancelCurrentElection();
+        PreviousRaftState = RaftState;
         RaftState = RaftState.Candidate;
         IncrementTerm(); // c.f. Rules.Candidates.1.1
         VoteForSelf(); // c.f. Rules.Candidates.1.2
@@ -398,7 +402,9 @@ public class RaftNode
 
     private void CancelCurrentElection()
     {
-        // TODO: I'm not really sure how to do this
+        if (RaftState == RaftState.Candidate) {
+            RaftState = PreviousRaftState;
+        }
     }
 
     private void AppendEntries(IEnumerable<LogEntry> entries)
