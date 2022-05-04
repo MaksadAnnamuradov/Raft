@@ -58,7 +58,7 @@ public class RaftNode
     private ConcurrentDictionary<int, int> confirmedReplicatedEntries = new(); // c.f. matchIndex[] (waiting until we know they got all of ours)
 
     // FIXED / UTIL
-    private const int TimeOutMultiplier = 100;
+    private const int TimeOutMultiplier = 50;
     private TimeSpanRange ElectionTimeOutRange = new TimeSpanRange(
         TimeSpan.FromMilliseconds(150 * TimeOutMultiplier),
         TimeSpan.FromMilliseconds(300 * TimeOutMultiplier));
@@ -71,12 +71,14 @@ public class RaftNode
     public RaftNode(List<IPEndPoint> allNodes, int nodeIndex, bool reset = false)
     {
         Console.WriteLine($"RaftNode({nodeIndex})");
-        Console.WriteLine($"  allNodes: {string.Join(", ", allNodes.Select(x => x.ToString()))}");
+        Console.WriteLine("  allNodes: {0}", string.Join(", ", allNodes.Select(x => x.ToString())));
         this.allNodes = allNodes;
         this.nodeIndex = nodeIndex;
         this.udpClient = new UdpClient(allNodes[nodeIndex]);
         electionTimer = new Timer(_ => StartBeingCandidate());
         heartBeatTimer = new Timer(_ => SendHeartBeat());
+        var raftCommand = new RaftCommand { CommandType = CommandType.Init };
+        AppendEntryToLog(new LogEntry() { Term = currentTerm, Command = raftCommand });
         if (!reset)
         {
             LoadStateFromFiles();
@@ -86,6 +88,7 @@ public class RaftNode
     public Task Start()
     {
         StartBeingFollower();
+
         return Task.Run(HandleRequests);
     }
 
@@ -212,19 +215,24 @@ public class RaftNode
 
     private void HandleRequestVoteRPC(RequestVoteRPCInfo request, IPEndPoint from)
     {
-        Console.WriteLine("Handling VoteRequest");
+        Console.WriteLine("Handling Request Vote RPC");
         StepDownIfNecessary(request.CandidateTerm); // c.f. Rules.All.2
+        Console.WriteLine("Handling VoteRequest line 2");
         RPCResponseInfo response = new RPCResponseInfo() { CurrentTerm = currentTerm, Response = false };
+        Console.WriteLine("Handling VoteRequest line 3");
         RaftMessage responseMessage = new RaftMessage() { MessageType = MessageType.Response, RPCResponseInfo = response };
+        Console.WriteLine("Handling VoteRequest line 4");
         int logLength = logEntries.Count;
-        int lastLogTerm = logEntries[logLength - 1].Term;
+        Console.WriteLine("Handling VoteRequest line 5");
+        var lastLogTerm = logEntries.Last().Term;
+        Console.WriteLine("Handling VoteRequest line 6");
 
         Console.WriteLine($"candidate term {request.CandidateTerm} > {currentTerm}  --- voted for {votedFor} --- candidate log term {request.CandidateLogTerm} > {lastLogTerm}");
 
         if (request.CandidateTerm >= currentTerm && // c.f. RequestVote.1
             (votedFor is null || votedFor == request.CandidateIndex) &&  // c.f. RequestVote.2
             request.CandidateLogLength >= logEntries.Count &&
-            request.CandidateLogTerm >= lastLogTerm)
+            request.CandidateLogTerm >= logEntries.Last().Term)
         {
             RestartElectionTimer(); // c.f. Rules.Followers.2
             response.Response = true;
@@ -252,7 +260,7 @@ public class RaftNode
         // TODO: what if the packet gets lost
         int logLength = logEntries.Count;
 
-        int lastLogTerm = logLength == 0 ? 0:logEntries[logLength - 1].Term;
+        int lastLogTerm = logLength == 0 ? 0 : logEntries[logLength - 1].Term;
 
         RequestVoteRPCInfo voteRequest = new()
         {
@@ -390,7 +398,7 @@ public class RaftNode
         lock (logEntries)
         {
             logEntries.Add(entry);
-            File.AppendText(entry.Json());
+            File.AppendAllText(logEntriesPath, entry.Json()+'\n');
         }
     }
 
@@ -463,7 +471,10 @@ public class RaftNode
             // send the response to the client
             if (RaftState == RaftState.Leader)
             {  // c.f. Leaders.2.b
-                Task.Run(() => Send(result, nextToApply.Command!.Client!, new UdpClient()));
+                if (nextToApply.Command!.Client != null)
+                {
+                    Task.Run(() => Send(result, nextToApply.Command.Client, new UdpClient()));
+                }
             }
         }
     }
@@ -548,7 +559,7 @@ public class RaftNode
         RaftMessage returnMessage = RaftMessage.FromJson(json);
         from = localFrom;
 
-        Console.WriteLine($"Received message{returnMessage} from {from} ");
+        Console.WriteLine($"Received message {returnMessage} from {from} ");
 
         return returnMessage;
     }
@@ -644,6 +655,6 @@ public class RaftCommand
     public CommandType CommandType { set; get; }
     public string? Key { set; get; } = null;
     public int Value { set; get; }
-    public IPEndPoint? Client { get; set; }
+    public IPEndPoint? Client { get; set; } = null;
 }
 
