@@ -14,7 +14,7 @@ public class AppendEntriesRPCInfo
     public LogEntry[] EntriesToAppend { get; set; } = new LogEntry[] { }; // c.f. entries[]
     public int SenderSafeEntries { get; set; } // c.f. leaderCommit
 }
-//t
+
 public class RPCResponseInfo
 {
     public int CurrentTerm { get; set; } // c.f. term
