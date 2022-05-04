@@ -402,8 +402,14 @@ public class RaftNode
 
     private void CancelCurrentElection()
     {
+        //TODO SEND MESSAGE TO EVERY NODE IN THE SYSTEM
         if (RaftState == RaftState.Candidate) {
-            RaftState = PreviousRaftState;
+            if (PreviousRaftState == RaftState.Follower) {
+                StartBeingFollower();
+            }
+            if (PreviousRaftState == RaftState.Leader) {
+                StartBeingLeader();
+            }
         }
     }
 
