@@ -45,7 +45,7 @@ public class RaftNode
     private object voteLock = new object(); // held when accessing votedFor
     private ConcurrentDictionary<int, bool> votesForMe = new();
     private List<LogEntry> logEntries = new(); // c.f. log[]
-    private string logEntriesPath => $"raftLog.{nodeIndex}.txt";
+    private string logEntriesPath => $"raftLog-{nodeIndex}.txt";
 
     // VOLATILE STATE
     /// <summary>The number of log entries that have been replicated and may be applied to the state machine</summary>
@@ -246,10 +246,12 @@ public class RaftNode
         Console.WriteLine("Handling Query");
         if (RaftState != RaftState.Leader) // forward to leader
         {
+            Console.WriteLine("Not leader, forwarding to leader");
             Send(message, allNodes[leaderIndex]);
         }
         else
         {
+            Console.WriteLine("Leader, sending back query response");
             AppendEntryToLog(new LogEntry() { Term = currentTerm, Command = message.RaftCommand }); // c.f. Rules.Leaders.2a
             Task.Run(ApplyReadyEntries);
         }
@@ -556,6 +558,9 @@ public class RaftNode
         IPEndPoint localFrom = new(0, 0);
         byte[] data = udpClient.Receive(ref localFrom);
         string json = UTF8Encoding.UTF8.GetString(data);
+
+        Console.WriteLine($"Received message {json} from {localFrom.Address}{localFrom.Port}");
+        
         RaftMessage returnMessage = RaftMessage.FromJson(json);
         from = localFrom;
 
