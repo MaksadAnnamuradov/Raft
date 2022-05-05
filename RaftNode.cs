@@ -118,8 +118,20 @@ public class RaftNode
     public void StartBeingFollower()
     {
         Console.WriteLine("Changing to Follower");
+        heartBeatTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         RaftState = RaftState.Follower;
+        ClearVote();
         RestartElectionTimer();
+    }
+
+    private void ClearVote()
+    {
+        lock (voteLock)
+        {
+            votedFor = null;
+            Console.WriteLine("Cleared the vote");
+            File.WriteAllText(votedForPath, "");
+        }
     }
 
     private void VoteForSelf()
@@ -227,15 +239,15 @@ public class RaftNode
         Console.WriteLine("Handling VoteRequest line 4");
         int logLength = logEntries.Count;
         Console.WriteLine("Handling VoteRequest line 5");
-        var lastLogTerm = logEntries.Last().Term;
+        var lastLogTerm = GetLogTerm(logLength-1);
         Console.WriteLine("Handling VoteRequest line 6");
 
         Console.WriteLine($"candidate term {request.CandidateTerm} > {currentTerm}  --- voted for {votedFor} --- candidate log term {request.CandidateLogTerm} > {lastLogTerm}");
 
         if (request.CandidateTerm >= currentTerm && // c.f. RequestVote.1
             (votedFor is null || votedFor == request.CandidateIndex) &&  // c.f. RequestVote.2
-            request.CandidateLogLength >= logEntries.Count &&
-            request.CandidateLogTerm >= logEntries.Last().Term)
+            request.CandidateLogLength >= logLength &&
+            request.CandidateLogTerm >= lastLogTerm)
         {
             RestartElectionTimer(); // c.f. Rules.Followers.2
             response.Response = true;
@@ -282,7 +294,7 @@ public class RaftNode
                 RequestVoteRPCInfo = voteRequest
             });
 
-            Console.WriteLine($"Reply for vote request {reply}");
+            Console.WriteLine($"Reply to vote request {reply}");
             if (reply is null)
             {
                 continue;
@@ -302,7 +314,7 @@ public class RaftNode
 
     private void SendHeartBeat()
     {
-        Console.WriteLine("Sending Heartbeat");
+        Console.WriteLine("Sending Heartbeat:" + RaftState);
         heartBeatTimer.Change(HeartBeatTimeOut, Timeout.InfiniteTimeSpan);
         List<Task> tasks = new();
         foreach (int i in Enumerable.Range(0, allNodes.Count))
@@ -318,13 +330,12 @@ public class RaftNode
     private void SendAndReceiveOneHeartBeat(int index)
     {
         // c.f. Rules.Leaders.2a
-        while (true)
+        int logLength, numSent;
+        do 
         {
-            int logLength = logEntries.Count;
-            int numSent = possiblyReplicatedEntries[index];
+            logLength = logEntries.Count;
+            numSent = possiblyReplicatedEntries[index];
             int lastTermSent = GetLogTerm(numSent - 1);
-            if (logLength > numSent)
-            {
                 AppendEntriesRPCInfo request = new AppendEntriesRPCInfo()
                 {
                     LeaderTerm = currentTerm,
@@ -347,20 +358,17 @@ public class RaftNode
                     possiblyReplicatedEntries[index] = numSent - 1; // c.f. Rules.Leaders.3.2
                     continue;
                 }
-            }
-            else
-            {
-                break;
-            }
-        }
+                
+        }while (logLength > numSent);
     }
 
     private int GetLogTerm(int index)
     {
-       if(logEntries.Count > index){
-           return logEntries[index].Term;
-       }
-       else return 0;
+        if (index >= 0 && logEntries.Count > index)
+        {
+            return logEntries[index].Term;
+        }
+        else return 0;
     }
 
     private void UpdateLeaderSafeEntries()
@@ -437,8 +445,9 @@ public class RaftNode
     public void RestartElectionTimer()
     {
         // c.f. Rules.Candidates.4
-        Console.WriteLine("Changing election timer");
-        electionTimer.Change(ElectionTimeOutRange.SampleUniform(randomGenerator), Timeout.InfiniteTimeSpan);
+        var timeToElection = ElectionTimeOutRange.SampleUniform(randomGenerator);
+        Console.WriteLine("Changing election timer: " + timeToElection);
+        electionTimer.Change(timeToElection, Timeout.InfiniteTimeSpan);
     }
 
     private void CancelCurrentElection()
@@ -496,7 +505,8 @@ public class RaftNode
                 if (nextToApply.Command!.Client is not null)
                 {
                     Console.WriteLine("sending response to:" + nextToApply.Command.Client);
-                    Task.Run(() => Send(result, IPEndPoint.Parse(nextToApply.Command.Client), new UdpClient()));
+                    RaftMessage raftResponse = new RaftMessage() { MessageType = MessageType.QueryResponse, RaftResponse = result };
+                    Task.Run(() => Send(raftResponse, IPEndPoint.Parse(nextToApply.Command.Client), new UdpClient()));
                 }
             }
         }
@@ -624,6 +634,7 @@ public class RaftMessage
     public RequestVoteRPCInfo? RequestVoteRPCInfo { get; set; }
     public RPCResponseInfo? RPCResponseInfo { get; set; }
     public RaftCommand? RaftCommand { get; set; }
+    public string? RaftResponse { get; set; }
 
     public static RaftMessage FromJson(string json)
     {
