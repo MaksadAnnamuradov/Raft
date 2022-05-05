@@ -78,7 +78,6 @@ public class RaftNode
         electionTimer = new Timer(_ => StartBeingCandidate());
         heartBeatTimer = new Timer(_ => SendHeartBeat());
         var raftCommand = new RaftCommand { CommandType = CommandType.Init };
-        AppendEntryToLog(new LogEntry() { Term = currentTerm, Command = raftCommand });
         if (!reset)
         {
             LoadStateFromFiles();
@@ -157,6 +156,10 @@ public class RaftNode
         while (true)
         {
             RaftMessage message = Receive(udpClient, out IPEndPoint from);
+            if (message.RaftCommand is not null && message.RaftCommand.Client is null)
+            {
+                message.RaftCommand.Client = from.ToString();
+            }
             Task.Run(() => HandleRequest(message, from));
         }
     }
@@ -193,7 +196,7 @@ public class RaftNode
         {
             if (request.LeaderTerm >= currentTerm && // c.f. AppendEntries.1
                 request.EntriesAlreadySent <= logEntries.Count && // c.f. AppendEntries.2a
-                request.LastTermSent == logEntries[request.EntriesAlreadySent - 1].Term) // c.f. AppendEntries.2b
+                request.LastTermSent == GetLogTerm(request.EntriesAlreadySent - 1)) // c.f. AppendEntries.2b
             {
                 leaderIndex = request.LeaderIndex;
                 response.Response = true;
@@ -271,22 +274,29 @@ public class RaftNode
             CandidateLogLength = logLength,
             CandidateLogTerm = lastLogTerm
         };
-        RaftMessage reply = SendAndReceive(allNodes[voterId], new RaftMessage()
+        while (true)
         {
-            MessageType = MessageType.VoteRequest,
-            RequestVoteRPCInfo = voteRequest
-        });
+            RaftMessage reply = SendAndReceive(allNodes[voterId], new RaftMessage()
+            {
+                MessageType = MessageType.VoteRequest,
+                RequestVoteRPCInfo = voteRequest
+            });
 
-        Console.WriteLine($"Reply for vote request {reply}");
-
-        if (reply.RPCResponseInfo!.Response)
-        {
-            Console.WriteLine("Successful vote");
-            AddVote(voterId);
-        }
-        else
-        {
-            UpdateTerm(reply.RPCResponseInfo.CurrentTerm);
+            Console.WriteLine($"Reply for vote request {reply}");
+            if (reply is null)
+            {
+                continue;
+            }
+            if (reply.RPCResponseInfo!.Response)
+            {
+                Console.WriteLine("Successful vote");
+                AddVote(voterId);
+            }
+            else
+            {
+                UpdateTerm(reply.RPCResponseInfo.CurrentTerm);
+            }
+            break;
         }
     }
 
@@ -312,7 +322,7 @@ public class RaftNode
         {
             int logLength = logEntries.Count;
             int numSent = possiblyReplicatedEntries[index];
-            int lastTermSent = logEntries[numSent - 1].Term;
+            int lastTermSent = GetLogTerm(numSent - 1);
             if (logLength > numSent)
             {
                 AppendEntriesRPCInfo request = new AppendEntriesRPCInfo()
@@ -343,6 +353,14 @@ public class RaftNode
                 break;
             }
         }
+    }
+
+    private int GetLogTerm(int index)
+    {
+       if(logEntries.Count > index){
+           return logEntries[index].Term;
+       }
+       else return 0;
     }
 
     private void UpdateLeaderSafeEntries()
@@ -400,7 +418,9 @@ public class RaftNode
         lock (logEntries)
         {
             logEntries.Add(entry);
-            File.AppendAllText(logEntriesPath, entry.Json()+'\n');
+            File.AppendAllText(logEntriesPath, entry.Json() + '\n');
+            confirmedReplicatedEntries[nodeIndex]++; // c.f. Rules.Leaders.3.1b
+            UpdateLeaderSafeEntries();
         }
     }
 
@@ -473,9 +493,10 @@ public class RaftNode
             // send the response to the client
             if (RaftState == RaftState.Leader)
             {  // c.f. Leaders.2.b
-                if (nextToApply.Command!.Client != null)
+                if (nextToApply.Command!.Client is not null)
                 {
-                    Task.Run(() => Send(result, nextToApply.Command.Client, new UdpClient()));
+                    Console.WriteLine("sending response to:" + nextToApply.Command.Client);
+                    Task.Run(() => Send(result, IPEndPoint.Parse(nextToApply.Command.Client), new UdpClient()));
                 }
             }
         }
@@ -560,7 +581,7 @@ public class RaftNode
         string json = UTF8Encoding.UTF8.GetString(data);
 
         Console.WriteLine($"Received message {json} from {localFrom.Address}{localFrom.Port}");
-        
+
         RaftMessage returnMessage = RaftMessage.FromJson(json);
         from = localFrom;
 
@@ -569,7 +590,7 @@ public class RaftNode
         return returnMessage;
     }
 
-    private static RaftMessage SendAndReceive(IPEndPoint otherNode, RaftMessage message)
+    public static RaftMessage SendAndReceive(IPEndPoint otherNode, RaftMessage message)
     {
         var raftMessage = new RaftMessage();
         try
@@ -580,7 +601,6 @@ public class RaftNode
         }
         catch (Exception e)
         {
-
             Console.WriteLine(e);
         }
         return raftMessage;
@@ -620,7 +640,8 @@ public enum MessageType
     VoteRequest,
     Response,
     Query,
-    AppendEntries
+    AppendEntries,
+    QueryResponse
 }
 
 record TimeSpanRange(TimeSpan Min, TimeSpan Max)
@@ -660,6 +681,6 @@ public class RaftCommand
     public CommandType CommandType { set; get; }
     public string? Key { set; get; } = null;
     public int Value { set; get; }
-    public IPEndPoint? Client { get; set; } = null;
+    public string? Client { get; set; } = null;
 }
 

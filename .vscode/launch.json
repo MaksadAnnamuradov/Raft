@@ -10,9 +10,9 @@
             "request": "launch",
             "preLaunchTask": "build",
             "program": "${workspaceFolder}/bin/Debug/net6.0/raft.dll",
-            "args": [],
+            "args": ["127.0.0.1:54321", "0"],
             "cwd": "${workspaceFolder}",
-            "console": "internalConsole",
+            "console": "integratedTerminal",
             "stopAtEntry": false
         },
         {
